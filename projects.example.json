@@ -1,0 +1,9 @@
+{
+  "projects": [
+    {
+      "gitlabID": 622148,
+      "azdoProject": "my-project",
+      "migrateMRs": true
+    }
+  ]
+}
