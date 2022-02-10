@@ -1,4 +1,4 @@
-# Drmax Gitlab AzDO Migration
+# Dr. Max Gitlab AzDO Migration
 Migrates gitlab repositories with open merge requests from Gitlab to Azure DevOps
 
 ## Development
@@ -40,3 +40,22 @@ If you're importing private repositories you need to configure [Service Endpoint
 7. Click on your service endpoint and your identificator will be visible in the URL
 `https://dev.azure.com/MYORG/MYPROJECT/_settings/adminservices?resourceId=**SERVICE_ENDPOINT**`
 8. You can remove the service endpoint once you're done importing your repositories.
+
+### Config File
+The structure of config file is as follows:
+```
+{
+  "projects": [
+    {
+      "gitlabID": 622148,
+      "azdoProject": "my-project",
+      "migrateMRs": true
+    },
+    #...
+  ]
+}
+```
+For each project you must (i.e. they're required) to specify three attributes:
+- **gitlabID** - (_int_) ID of your gitlab project
+- **azdoProject** - (_string_) name of the project where repository should be migrated to
+- **migrateMRs** - (_bool_) whether or not active Merge requests should be migrated as well

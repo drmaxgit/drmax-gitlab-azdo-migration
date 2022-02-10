@@ -71,7 +71,14 @@ func processProject(azdoCtx context.Context, project project, gitlabClient *gitl
 
 func importMergeRequests(azdoCtx context.Context, project project, gitlabClient *gitlab.Client, azdoClient git.Client, gitlabProject *gitlab.Project, repository *git.GitRepository) {
 	log.Debugf("Migrate merge requests for repo %s", *repository.Name)
-	gitlabMROptions := gitlab.ListProjectMergeRequestsOptions{}
+	gitlabMROptions := gitlab.ListProjectMergeRequestsOptions{
+		ListOptions: gitlab.ListOptions{
+			Page:    1,
+			PerPage: 100,
+		},
+		OrderBy: gitlab.String("created_at"),
+		Sort:    gitlab.String("asc"),
+	}
 	for {
 		mergeRequests, response, _ := gitlabClient.MergeRequests.ListProjectMergeRequests(gitlabProject.ID, &gitlabMROptions)
 		for _, mr := range mergeRequests {
@@ -102,7 +109,10 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 
 func importComments(azdoCtx context.Context, mr *gitlab.MergeRequest, pullRequest *git.GitPullRequest, gitlabClient *gitlab.Client, azdoClient git.Client) {
 	log.Debugf("Migrate discussions for merge request %d", mr.IID)
-	discussionOptions := gitlab.ListMergeRequestDiscussionsOptions{}
+	discussionOptions := gitlab.ListMergeRequestDiscussionsOptions{
+		Page:    1,
+		PerPage: 100,
+	}
 	for {
 		discussions, response, _ := gitlabClient.Discussions.ListMergeRequestDiscussions(mr.ProjectID, mr.IID, &discussionOptions)
 		for _, discussion := range discussions {
