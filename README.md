@@ -79,3 +79,4 @@ For each project you must (i.e. they're required) to specify three attributes:
   - All pull request discussions are also authored to the access token user
   - However for every item (both pull requests and discussions/comments) first line contains info on the original author as well as reference to their gitlab account 
 - **Azure DevOps import notifications** - for every import request azure will send you notification of successful import. If you're migrating huge amount of repositories, brace yourselves/your inboxes
+- **Existing disabled repository** - it's not possible to fetch/remove existing disabled repository via Azure DevOps api.

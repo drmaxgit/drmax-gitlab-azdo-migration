@@ -83,23 +83,7 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 	for {
 		mergeRequests, response, _ := gitlabClient.MergeRequests.ListProjectMergeRequests(gitlabProject.ID, &gitlabMROptions)
 		for _, mr := range mergeRequests {
-			if mr.State == "closed" || mr.State == "merged" {
-				continue
-			}
-			azdoRequest := translatePullRequest(mr, repository)
-			pullRequestArgs := git.CreatePullRequestArgs{
-				GitPullRequestToCreate: &azdoRequest,
-				RepositoryId:           gitlab.String(repository.Id.String()),
-				Project:                &project.AzdoProject,
-				SupportsIterations:     gitlab.Bool(false),
-			}
-
-			pullRequest, err := azdoClient.CreatePullRequest(azdoCtx, pullRequestArgs)
-			if err != nil {
-				log.Errorf("cannot migrate merge request %d: %s", mr.IID, err.Error())
-				continue
-			}
-			importComments(azdoCtx, mr, pullRequest, gitlabClient, azdoClient)
+			importMergeRequest(azdoCtx, azdoClient, gitlabClient, project, mr, repository)
 		}
 		if response.NextPage > response.CurrentPage {
 			gitlabMROptions.Page++
@@ -107,6 +91,26 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 		}
 		break
 	}
+}
+
+func importMergeRequest(azdoCtx context.Context, azdoClient git.Client, gitlabClient *gitlab.Client, project project, mr *gitlab.MergeRequest, repository *git.GitRepository) {
+	if mr.State == "closed" || mr.State == "merged" {
+		return
+	}
+	azdoRequest := translatePullRequest(mr, repository)
+	pullRequestArgs := git.CreatePullRequestArgs{
+		GitPullRequestToCreate: &azdoRequest,
+		RepositoryId:           gitlab.String(repository.Id.String()),
+		Project:                &project.AzdoProject,
+		SupportsIterations:     gitlab.Bool(false),
+	}
+
+	pullRequest, err := azdoClient.CreatePullRequest(azdoCtx, pullRequestArgs)
+	if err != nil {
+		log.Errorf("cannot migrate merge request %d: %s", mr.IID, err.Error())
+		return
+	}
+	importComments(azdoCtx, mr, pullRequest, gitlabClient, azdoClient)
 }
 
 func importComments(azdoCtx context.Context, mr *gitlab.MergeRequest, pullRequest *git.GitPullRequest, gitlabClient *gitlab.Client, azdoClient git.Client) {
@@ -118,42 +122,46 @@ func importComments(azdoCtx context.Context, mr *gitlab.MergeRequest, pullReques
 	for {
 		discussions, response, _ := gitlabClient.Discussions.ListMergeRequestDiscussions(mr.ProjectID, mr.IID, &discussionOptions)
 		for _, discussion := range discussions {
-			threadInit, fullThread := translateDiscussion(mr, discussion)
-			if threadInit == nil {
-				continue
-			}
-			threadArgs := git.CreateThreadArgs{
-				CommentThread: threadInit,
-				RepositoryId:  pullRequest.Repository.Name,
-				PullRequestId: pullRequest.PullRequestId,
-				Project:       pullRequest.Repository.Project.Name,
-			}
-			createdThread, err := azdoClient.CreateThread(azdoCtx, threadArgs)
-			if err != nil {
-				log.Error(err)
-				continue
-			}
-			if fullThread != nil {
-				fullThread.Id = createdThread.Id
-				updateThreadArgs := git.UpdateThreadArgs{
-					CommentThread: fullThread,
-					RepositoryId:  pullRequest.Repository.Name,
-					PullRequestId: pullRequest.PullRequestId,
-					Project:       pullRequest.Repository.Project.Name,
-					ThreadId:      createdThread.Id,
-				}
-				_, err = azdoClient.UpdateThread(azdoCtx, updateThreadArgs)
-				if err != nil {
-					log.Error(err)
-					continue
-				}
-			}
+			importCommentThread(azdoCtx, azdoClient, mr, pullRequest, discussion)
 		}
 		if response.NextPage > response.CurrentPage {
 			discussionOptions.Page++
 			continue
 		}
 		break
+	}
+}
+
+func importCommentThread(azdoCtx context.Context, azdoClient git.Client, mr *gitlab.MergeRequest, pullRequest *git.GitPullRequest, discussion *gitlab.Discussion) {
+	threadInit, fullThread := translateDiscussion(mr, discussion)
+	if threadInit == nil {
+		return
+	}
+	threadArgs := git.CreateThreadArgs{
+		CommentThread: threadInit,
+		RepositoryId:  pullRequest.Repository.Name,
+		PullRequestId: pullRequest.PullRequestId,
+		Project:       pullRequest.Repository.Project.Name,
+	}
+	createdThread, err := azdoClient.CreateThread(azdoCtx, threadArgs)
+	if err != nil {
+		log.Errorf("cannot create thread (%s): %s", noteLink(discussion.Notes[0], mr), err)
+		return
+	}
+	if fullThread != nil {
+		fullThread.Id = createdThread.Id
+		updateThreadArgs := git.UpdateThreadArgs{
+			CommentThread: fullThread,
+			RepositoryId:  pullRequest.Repository.Name,
+			PullRequestId: pullRequest.PullRequestId,
+			Project:       pullRequest.Repository.Project.Name,
+			ThreadId:      createdThread.Id,
+		}
+		_, err = azdoClient.UpdateThread(azdoCtx, updateThreadArgs)
+		if err != nil {
+			log.Errorf("cannot update thread (%s): %s", noteLink(discussion.Notes[0], mr), err)
+			return
+		}
 	}
 }
 
@@ -190,9 +198,8 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 		}
 		body = suggestionReplacer.ReplaceAllString(body, "```suggestion")
 		content := fmt.Sprintf(
-			"*Migrated from [Gitlab](%s/diffs#note_%d) | Author: ![%s](%s =24x24) [%s](%s)%s*\n\n%s",
-			mr.WebURL,
-			note.ID,
+			"*Migrated from [Gitlab](%s) | Author: ![%s](%s =24x24) [%s](%s)%s*\n\n%s",
+			noteLink(note, mr),
 			note.Author.Name,
 			note.Author.AvatarURL,
 			note.Author.Name,
@@ -232,6 +239,10 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 	thread.ThreadContext = nil
 
 	return &threadInit, &thread
+}
+
+func noteLink(note *gitlab.Note, mr *gitlab.MergeRequest) string {
+	return fmt.Sprintf("%s/diffs#note_%d", mr.WebURL, note.ID)
 }
 
 func translatePullRequest(mr *gitlab.MergeRequest, repository *git.GitRepository) git.GitPullRequest {
@@ -284,6 +295,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 			})
 			if err != nil {
 				log.Errorf("Could remove previous repository, cannot import to existing repo %s", err.Error())
+				return nil
 			}
 		}
 	}
