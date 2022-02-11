@@ -46,7 +46,8 @@ func main() {
 	azdoCtx, azdoClient := initAzdo()
 	configFile := readConfig()
 
-	for _, project := range configFile.Projects {
+	for i, project := range configFile.Projects {
+		log.Infof("Processing project %d (%d/%d)", project.GitlabID, i+1, len(configFile.Projects))
 		processProject(azdoCtx, project, gitlabClient, azdoClient)
 	}
 }
@@ -95,7 +96,8 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 
 			pullRequest, err := azdoClient.CreatePullRequest(azdoCtx, pullRequestArgs)
 			if err != nil {
-				log.Error(err)
+				log.Errorf("cannot migrate merge request %d: %s", mr.IID, err.Error())
+				continue
 			}
 			importComments(azdoCtx, mr, pullRequest, gitlabClient, azdoClient)
 		}
@@ -166,10 +168,14 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 		PullRequestThreadContext: nil,
 	}
 	if firstNote.Position != nil && firstNote.Position.NewPath != "" {
+		line := firstNote.Position.NewLine
+		if firstNote.Position.LineRange != nil {
+			line = firstNote.Position.LineRange.StartRange.NewLine
+		}
 		thread.ThreadContext = &git.CommentThreadContext{
 			FilePath:       gitlab.String("/" + firstNote.Position.NewPath),
-			RightFileStart: &git.CommentPosition{Line: &firstNote.Position.LineRange.StartRange.NewLine},
-			RightFileEnd:   &git.CommentPosition{Line: &firstNote.Position.LineRange.StartRange.NewLine},
+			RightFileStart: &git.CommentPosition{Line: &line},
+			RightFileEnd:   &git.CommentPosition{Line: &line},
 		}
 	}
 	id := 1
@@ -177,7 +183,7 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 	for _, note := range discussion.Notes {
 		lineRange := ""
 		body := note.Body
-		if id == 1 && note.Position != nil && note.Position.LineRange.StartRange.NewLine != note.Position.LineRange.EndRange.NewLine {
+		if id == 1 && note.Position != nil && note.Position.LineRange != nil && note.Position.LineRange.StartRange.NewLine != note.Position.LineRange.EndRange.NewLine {
 			//AzDO does not support multiline comments so we add a note at least
 			lineRange = fmt.Sprintf("| **🚩 Multiline comment %d-%d**", note.Position.LineRange.StartRange.NewLine, note.Position.LineRange.EndRange.NewLine)
 			body = suggestionReplacer.ReplaceAllString(body, "🚩 **️Multiline suggestions are not supported in AzDO - if suggestion is multiline, commit it manually**\n```suggestion")
@@ -290,7 +296,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 		Project: &project.AzdoProject,
 	})
 	if err != nil {
-		log.Error(err)
+		log.Errorf("could not initiate repository %s: %s", gitlabProject.Path, err)
 		return nil
 	}
 
@@ -316,7 +322,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 	log.Debugf("Create import request to transfer %s into new repo %s", gitlabProject.HTTPURLToRepo, gitlabProject.Path)
 	importRequest, err := azdoClient.CreateImportRequest(azdoCtx, importRequestArgs)
 	if err != nil {
-		log.Errorf("could not create import request. If you're using private repo you need to specify service endpoint for gitlab (see README): %s", err)
+		log.Errorf("could not create import request. Either service endpoint is not correct or source repository is empty: %s", err)
 		return nil
 	}
 
