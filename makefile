@@ -27,6 +27,13 @@ build: dep ## Build the binary file
 	GOOS=windows go build -o bin/$(PROJECT_NAME)-windows-amd64-$(CI_COMMIT_TAG).exe
 	GOOS=linux go build -o bin/$(PROJECT_NAME)-linux-amd64-$(CI_COMMIT_TAG)
 
+tarball: build
+	mv bin/$(PROJECT_NAME)-darwin-amd64-$(CI_COMMIT_TAG) $(PROJECT_NAME)-darwin-amd64
+	mv bin/$(PROJECT_NAME)-windows-amd64-$(CI_COMMIT_TAG).exe $(PROJECT_NAME)-windows-amd64.exe
+	mv bin/$(PROJECT_NAME)-linux-amd64-$(CI_COMMIT_TAG) $(PROJECT_NAME)-linux-amd64
+	tar acf $(PROJECT_NAME)-darwin-amd64-$(CI_COMMIT_TAG).tar.gz $(PROJECT_NAME)-darwin-amd64 LICENSE.md
+	tar acf $(PROJECT_NAME)-windows-amd64-$(CI_COMMIT_TAG).tar.gz $(PROJECT_NAME)-windows-amd64.exe LICENSE.md
+	tar acf $(PROJECT_NAME)-linux-amd64-$(CI_COMMIT_TAG).tar.gz $(PROJECT_NAME)-linux-amd64 LICENSE.md
 
 clean: ## Remove previous build
 	@rm -f bin/$(PROJECT_NAME)-*

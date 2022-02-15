@@ -31,8 +31,8 @@ jobs:
        export CI_COMMIT_TAG=${GITHUB_REF#refs/*/}
     - name: Checkout code
       uses: actions/checkout@v2
-    - name: Build binaries
-      run: make build
+    - name: Build tarballs
+      run: make tarball
     - name: Create Release
       id: create_release
       uses: actions/create-release@v1
@@ -46,21 +46,21 @@ jobs:
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-        asset_path: ./bin/${{ github.event.repository.name }}-darwin-amd64-${{ env.CI_COMMIT_TAG }}
-        asset_name: ${{ github.event.repository.name }}-darwin-amd64-${{ env.CI_COMMIT_TAG }}
+        asset_path: ${{ github.event.repository.name }}-darwin-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
+        asset_name: ${{ github.event.repository.name }}-darwin-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
         asset_content_type: application/x-mach-binary
     - name: Upload Linux binary
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-        asset_path: ./bin/${{ github.event.repository.name }}-linux-amd64-${{ env.CI_COMMIT_TAG }}
-        asset_name: ${{ github.event.repository.name }}-linux-amd64-${{ env.CI_COMMIT_TAG }}
+        asset_path: ${{ github.event.repository.name }}-linux-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
+        asset_name: ${{ github.event.repository.name }}-linux-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
         asset_content_type: application/x-executable
     - name: Upload Windows binary
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps
-        asset_path: ./bin/${{ github.event.repository.name }}-windows-amd64-${{ env.CI_COMMIT_TAG }}.exe
-        asset_name: ${{ github.event.repository.name }}-windows-amd64-${{ env.CI_COMMIT_TAG }}.exe
+        asset_path: ${{ github.event.repository.name }}-windows-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
+        asset_name: ${{ github.event.repository.name }}-windows-amd64-${{ env.CI_COMMIT_TAG }}.tar.gz
         asset_content_type: application/x-dosexec
 
