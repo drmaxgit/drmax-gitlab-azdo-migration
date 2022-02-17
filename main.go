@@ -83,7 +83,7 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 	for {
 		mergeRequests, response, err := gitlabClient.MergeRequests.ListProjectMergeRequests(gitlabProject.ID, &gitlabMROptions)
 		if err != nil {
-			log.Error("could not fetch MRs page %d: %s", gitlabMROptions.Page, err.Error())
+			log.Errorf("could not fetch MRs page %d: %s", gitlabMROptions.Page, err.Error())
 		}
 		for _, mr := range mergeRequests {
 			importMergeRequest(azdoCtx, azdoClient, gitlabClient, project, mr, repository)
@@ -125,7 +125,7 @@ func importComments(azdoCtx context.Context, mr *gitlab.MergeRequest, pullReques
 	for {
 		discussions, response, err := gitlabClient.Discussions.ListMergeRequestDiscussions(mr.ProjectID, mr.IID, &discussionOptions)
 		if err != nil {
-			log.Error("could not fetch Discussion page %d: %s", discussionOptions.Page, err.Error())
+			log.Errorf("could not fetch Discussion page %d: %s", discussionOptions.Page, err.Error())
 		}
 		for _, discussion := range discussions {
 			importCommentThread(azdoCtx, azdoClient, mr, pullRequest, discussion)
