@@ -47,7 +47,7 @@ func main() {
 	configFile := readConfig()
 
 	for i, project := range configFile.Projects {
-		log.Infof("Processing project %d (%d/%d)", project.GitlabID, i+1, len(configFile.Projects))
+		log.Infof("processing project %d (%d/%d)", project.GitlabID, i+1, len(configFile.Projects))
 		processProject(azdoCtx, project, gitlabClient, azdoClient)
 	}
 }
@@ -55,11 +55,11 @@ func main() {
 func processProject(azdoCtx context.Context, project project, gitlabClient *gitlab.Client, azdoClient git.Client) {
 	gitlabProject, _, err := gitlabClient.Projects.GetProject(project.GitlabID, &gitlab.GetProjectOptions{})
 	if err != nil {
-		log.Errorf("Couldn't find gitlab project %d does your API key have permission to the project?", project.GitlabID)
+		log.Errorf("couldn't find gitlab project %d does your API key have permission to the project?", project.GitlabID)
 		return
 	}
 
-	log.Debugf("Creating import request for %s to project %s", gitlabProject.HTTPURLToRepo, project.AzdoProject)
+	log.Debugf("creating import request for %s to project %s", gitlabProject.HTTPURLToRepo, project.AzdoProject)
 	repository := importRepository(azdoCtx, project, gitlabProject, azdoClient)
 	if repository == nil {
 		return
@@ -71,7 +71,7 @@ func processProject(azdoCtx context.Context, project project, gitlabClient *gitl
 }
 
 func importMergeRequests(azdoCtx context.Context, project project, gitlabClient *gitlab.Client, azdoClient git.Client, gitlabProject *gitlab.Project, repository *git.GitRepository) {
-	log.Debugf("Migrate merge requests for repo %s", *repository.Name)
+	log.Debugf("migrate merge requests for repo %s", *repository.Name)
 	gitlabMROptions := gitlab.ListProjectMergeRequestsOptions{
 		ListOptions: gitlab.ListOptions{
 			Page:    1,
@@ -81,7 +81,10 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 		Sort:    gitlab.String("asc"),
 	}
 	for {
-		mergeRequests, response, _ := gitlabClient.MergeRequests.ListProjectMergeRequests(gitlabProject.ID, &gitlabMROptions)
+		mergeRequests, response, err := gitlabClient.MergeRequests.ListProjectMergeRequests(gitlabProject.ID, &gitlabMROptions)
+		if err != nil {
+			log.Error("could not fetch MRs page %d: %s", gitlabMROptions.Page, err.Error())
+		}
 		for _, mr := range mergeRequests {
 			importMergeRequest(azdoCtx, azdoClient, gitlabClient, project, mr, repository)
 		}
@@ -114,13 +117,16 @@ func importMergeRequest(azdoCtx context.Context, azdoClient git.Client, gitlabCl
 }
 
 func importComments(azdoCtx context.Context, mr *gitlab.MergeRequest, pullRequest *git.GitPullRequest, gitlabClient *gitlab.Client, azdoClient git.Client) {
-	log.Debugf("Migrate discussions for merge request %d", mr.IID)
+	log.Debugf("migrate discussions for merge request %d", mr.IID)
 	discussionOptions := gitlab.ListMergeRequestDiscussionsOptions{
 		Page:    1,
 		PerPage: 100,
 	}
 	for {
-		discussions, response, _ := gitlabClient.Discussions.ListMergeRequestDiscussions(mr.ProjectID, mr.IID, &discussionOptions)
+		discussions, response, err := gitlabClient.Discussions.ListMergeRequestDiscussions(mr.ProjectID, mr.IID, &discussionOptions)
+		if err != nil {
+			log.Error("could not fetch Discussion page %d: %s", discussionOptions.Page, err.Error())
+		}
 		for _, discussion := range discussions {
 			importCommentThread(azdoCtx, azdoClient, mr, pullRequest, discussion)
 		}
@@ -283,7 +289,7 @@ func translatePullRequest(mr *gitlab.MergeRequest, repository *git.GitRepository
 
 func importRepository(azdoCtx context.Context, project project, gitlabProject *gitlab.Project, azdoClient git.Client) *git.GitRepository {
 	if *recreateRepository {
-		log.Debugf("Removing repository %s if exists from %s", gitlabProject.Path, project.AzdoProject)
+		log.Debugf("removing repository %s if exists from %s", gitlabProject.Path, project.AzdoProject)
 		repo, _ := azdoClient.GetRepository(azdoCtx, git.GetRepositoryArgs{
 			RepositoryId: &gitlabProject.Path,
 			Project:      &project.AzdoProject,
@@ -294,13 +300,13 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 				Project:      nil,
 			})
 			if err != nil {
-				log.Errorf("Could remove previous repository, cannot import to existing repo %s", err.Error())
+				log.Errorf("could remove previous repository, cannot import to existing repo %s", err.Error())
 				return nil
 			}
 		}
 	}
 
-	log.Debugf("Create empty repository %s", gitlabProject.Path)
+	log.Debugf("create empty repository %s", gitlabProject.Path)
 	azdoRepository, err := azdoClient.CreateRepository(azdoCtx, git.CreateRepositoryArgs{
 		GitRepositoryToCreate: &git.GitRepositoryCreateOptions{
 			Name: &gitlabProject.Path,
@@ -331,7 +337,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 		RepositoryId:  gitlab.String(azdoRepository.Id.String()),
 	}
 
-	log.Debugf("Create import request to transfer %s into new repo %s", gitlabProject.HTTPURLToRepo, gitlabProject.Path)
+	log.Debugf("create import request to transfer %s into new repo %s", gitlabProject.HTTPURLToRepo, gitlabProject.Path)
 	importRequest, err := azdoClient.CreateImportRequest(azdoCtx, importRequestArgs)
 	if err != nil {
 		log.Errorf("could not create import request. Either service endpoint is not correct or source repository is empty: %s", err)
@@ -346,19 +352,19 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 	for {
 		currentRequest, err := azdoClient.GetImportRequest(azdoCtx, requestStatusArg)
 		if (currentRequest == nil && err == nil) || *currentRequest.Status == git.GitAsyncOperationStatusValues.Completed {
-			log.Debug("Import finished")
+			log.Debug("import finished")
 			return azdoRepository
 		}
 		if *currentRequest.Status == git.GitAsyncOperationStatusValues.Abandoned {
-			log.Error("Import request abandoned")
+			log.Error("import request abandoned")
 			return nil
 		}
 		if *currentRequest.Status == git.GitAsyncOperationStatusValues.Failed {
-			log.Errorf("Import request failed: %s", *currentRequest.DetailedStatus.ErrorMessage)
+			log.Errorf("import request failed: %s", *currentRequest.DetailedStatus.ErrorMessage)
 			return nil
 		}
 
-		log.Debugf("Waiting for import to finish retry in 3 seconds...")
+		log.Debugf("waiting for import to finish retry in 3 seconds...")
 		time.Sleep(3 * time.Second)
 	}
 }
