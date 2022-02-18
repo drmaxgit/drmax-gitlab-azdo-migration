@@ -1,6 +1,6 @@
 fileignoreconfig:
 - filename: go.sum
-  checksum: 5ee97405cb07380b7dd3c026de727b4575549b6e6ae35f85cd70df9d0000f0e4
+  checksum: 63c1915719260caf2e240738ad2123b9bd646828a5669f713e23d4f860f1977c
 - filename: main_test.go
   checksum: f6e78d89fd8163e8807156cd66a8a33db2159f531e4bd9677562fb6c72873260
 version: "1.0"
