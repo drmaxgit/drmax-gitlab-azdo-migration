@@ -6,7 +6,7 @@ CI_COMMIT_TAG ?= v0.0.0
 .PHONY: all dep clean build
 
 all: clean dep build
-test: vet fmt lint
+check: vet fmt lint
 
 vet: ## Vet code
 	@go vet
@@ -17,6 +17,9 @@ fmt: ## Format code
 lint: ## Lint code
 	@go install golang.org/x/lint/golint
 	@golint .
+
+test: ## Run tests
+	@go test
 
 dep: ## Get the dependencies
 	@go get

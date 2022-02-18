@@ -19,7 +19,7 @@ jobs:
     - name: Install dependencies
       run: make dep
     - name: Run vet, fmt, lint
-      run: make test
+      run: make check
   release:
     runs-on: ubuntu-latest
     needs: [build]

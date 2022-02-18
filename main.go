@@ -24,6 +24,8 @@ var (
 	azdoServiceEndpoint = kingpin.Flag("azdo-endpoint", "Azure DevOps service endpoint for gitlab").Default("").String()
 	configFile          = kingpin.Flag("config", "Projects configuration file").Default("projects.json").String()
 	recreateRepository  = kingpin.Flag("recreate-repo", "If true, repository in azdo will be deleted first and created again. Use with caution").Default("false").Bool()
+	//SuggestionReplacer Regex to match gitlab suggestion schema so that it can be replaced to azdo schema
+	SuggestionReplacer = regexp.MustCompile("```suggestion:.*")
 )
 
 type config struct {
@@ -97,12 +99,12 @@ func importMergeRequests(azdoCtx context.Context, project project, gitlabClient 
 }
 
 func importMergeRequest(azdoCtx context.Context, azdoClient git.Client, gitlabClient *gitlab.Client, project project, mr *gitlab.MergeRequest, repository *git.GitRepository) {
-	if mr.State == "closed" || mr.State == "merged" {
+	azdoRequest := translatePullRequest(mr, repository)
+	if azdoRequest == nil {
 		return
 	}
-	azdoRequest := translatePullRequest(mr, repository)
 	pullRequestArgs := git.CreatePullRequestArgs{
-		GitPullRequestToCreate: &azdoRequest,
+		GitPullRequestToCreate: azdoRequest,
 		RepositoryId:           gitlab.String(repository.Id.String()),
 		Project:                &project.AzdoProject,
 		SupportsIterations:     gitlab.Bool(false),
@@ -151,7 +153,7 @@ func importCommentThread(azdoCtx context.Context, azdoClient git.Client, mr *git
 	}
 	createdThread, err := azdoClient.CreateThread(azdoCtx, threadArgs)
 	if err != nil {
-		log.Errorf("cannot create thread (%s): %s", noteLink(discussion.Notes[0], mr), err)
+		log.Errorf("cannot create thread (%s): %s", prepareNoteLink(discussion.Notes[0], mr), err)
 		return
 	}
 	if fullThread != nil {
@@ -165,7 +167,7 @@ func importCommentThread(azdoCtx context.Context, azdoClient git.Client, mr *git
 		}
 		_, err = azdoClient.UpdateThread(azdoCtx, updateThreadArgs)
 		if err != nil {
-			log.Errorf("cannot update thread (%s): %s", noteLink(discussion.Notes[0], mr), err)
+			log.Errorf("cannot update thread (%s): %s", prepareNoteLink(discussion.Notes[0], mr), err)
 			return
 		}
 	}
@@ -180,6 +182,7 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 	var comments []git.Comment
 	thread := git.GitPullRequestCommentThread{
 		PullRequestThreadContext: nil,
+		PublishedDate:            &azuredevops.Time{Time: *firstNote.CreatedAt},
 	}
 	if firstNote.Position != nil && firstNote.Position.NewPath != "" {
 		line := firstNote.Position.NewLine
@@ -193,38 +196,13 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 		}
 	}
 	id := 1
-	suggestionReplacer := regexp.MustCompile("```suggestion:.*")
 	for _, note := range discussion.Notes {
-		lineRange := ""
-		body := note.Body
-		if id == 1 && note.Position != nil && note.Position.LineRange != nil && note.Position.LineRange.StartRange.NewLine != note.Position.LineRange.EndRange.NewLine {
-			//AzDO does not support multiline comments so we add a note at least
-			lineRange = fmt.Sprintf("| **🚩 Multiline comment %d-%d**", note.Position.LineRange.StartRange.NewLine, note.Position.LineRange.EndRange.NewLine)
-			body = suggestionReplacer.ReplaceAllString(body, "🚩 **️Multiline suggestions are not supported in AzDO - if suggestion is multiline, commit it manually**\n```suggestion")
-		}
-		body = suggestionReplacer.ReplaceAllString(body, "```suggestion")
-		content := fmt.Sprintf(
-			"*Migrated from [Gitlab](%s) | Author: ![%s](%s =24x24) [%s](%s)%s*\n\n%s",
-			noteLink(note, mr),
-			note.Author.Name,
-			note.Author.AvatarURL,
-			note.Author.Name,
-			note.Author.WebURL,
-			lineRange,
-			body,
-		)
+		commentType := &git.CommentTypeValues.Text
 
-		comment := git.Comment{
-			Id:              gitlab.Int(id),
-			Content:         &content,
-			PublishedDate:   &azuredevops.Time{Time: *note.CreatedAt},
-			LastUpdatedDate: &azuredevops.Time{Time: *note.UpdatedAt},
-			CommentType:     &git.CommentTypeValues.Text,
-		}
 		if firstNote.Position != nil && firstNote.Position.NewPath != "" {
-			comment.CommentType = &git.CommentTypeValues.CodeChange
+			commentType = &git.CommentTypeValues.CodeChange
 		}
-		comment.ParentCommentId = gitlab.Int(id - 1)
+		comment := translateNote(mr, note, id, commentType)
 		if !note.Resolved {
 			status = git.CommentThreadStatusValues.Active
 		}
@@ -247,13 +225,51 @@ func translateDiscussion(mr *gitlab.MergeRequest, discussion *gitlab.Discussion)
 	return &threadInit, &thread
 }
 
-func noteLink(note *gitlab.Note, mr *gitlab.MergeRequest) string {
+func translateNote(mr *gitlab.MergeRequest, note *gitlab.Note, id int, commentType *git.CommentType) git.Comment {
+	content := prepareNoteBody(mr, note, id)
+
+	comment := git.Comment{
+		Id:              gitlab.Int(id),
+		Content:         &content,
+		PublishedDate:   &azuredevops.Time{Time: *note.CreatedAt},
+		LastUpdatedDate: &azuredevops.Time{Time: *note.UpdatedAt},
+		CommentType:     commentType,
+	}
+	comment.ParentCommentId = gitlab.Int(id - 1)
+	return comment
+}
+
+func prepareNoteBody(mr *gitlab.MergeRequest, note *gitlab.Note, id int) string {
+	lineRange := ""
+	body := note.Body
+	if id == 1 && note.Position != nil && note.Position.LineRange != nil && note.Position.LineRange.StartRange.NewLine != note.Position.LineRange.EndRange.NewLine {
+		//AzDO does not support multiline comments so we add a note at least
+		lineRange = fmt.Sprintf("| **🚩 Multiline comment %d-%d**", note.Position.LineRange.StartRange.NewLine, note.Position.LineRange.EndRange.NewLine)
+		body = SuggestionReplacer.ReplaceAllString(body, "🚩 **️Multiline suggestions are not supported in AzDO - if suggestion is multiline, commit it manually**\n```suggestion")
+	}
+	body = SuggestionReplacer.ReplaceAllString(body, "```suggestion")
+	content := fmt.Sprintf(
+		"*Migrated from [Gitlab](%s) | Author: ![%s](%s =24x24) [%s](%s)%s*\n\n%s",
+		prepareNoteLink(note, mr),
+		note.Author.Name,
+		note.Author.AvatarURL,
+		note.Author.Name,
+		note.Author.WebURL,
+		lineRange,
+		body,
+	)
+	return content
+}
+
+func prepareNoteLink(note *gitlab.Note, mr *gitlab.MergeRequest) string {
 	return fmt.Sprintf("%s/diffs#note_%d", mr.WebURL, note.ID)
 }
 
-func translatePullRequest(mr *gitlab.MergeRequest, repository *git.GitRepository) git.GitPullRequest {
+func translatePullRequest(mr *gitlab.MergeRequest, repository *git.GitRepository) *git.GitPullRequest {
+	if mr.State == "closed" || mr.State == "merged" {
+		return nil
+	}
 	azdoRequest := git.GitPullRequest{}
-	description := mr.Description
 
 	azdoRequest.CreatedBy = &webapi.IdentityRef{
 		DisplayName: &mr.Author.Username,
@@ -269,78 +285,38 @@ func translatePullRequest(mr *gitlab.MergeRequest, repository *git.GitRepository
 	}
 	azdoRequest.Status = &git.PullRequestStatusValues.Active
 
-	description = fmt.Sprintf(
-		"*Migrated from [Gitlab](%s) | Author: ![%s](%s =24x24) [%s](%s)*\n\n%s",
-		mr.WebURL,
-		mr.Author.Name,
-		mr.Author.AvatarURL,
-		mr.Author.Name,
-		mr.Author.WebURL,
-		description,
-	)
+	description := preparePullRequestDescription(mr)
 	azdoRequest.Title = &mr.Title
 	sourceBranch := fmt.Sprintf("refs/heads/%s", mr.SourceBranch)
 	targetBranch := fmt.Sprintf("refs/heads/%s", mr.TargetBranch)
 	azdoRequest.SourceRefName = &sourceBranch
 	azdoRequest.TargetRefName = &targetBranch
 	azdoRequest.Description = &description
-	return azdoRequest
+	return &azdoRequest
+}
+
+func preparePullRequestDescription(mr *gitlab.MergeRequest) string {
+	return fmt.Sprintf(
+		"*Migrated from [Gitlab](%s) | Author: ![%s](%s =24x24) [%s](%s)*\n\n%s",
+		mr.WebURL,
+		mr.Author.Name,
+		mr.Author.AvatarURL,
+		mr.Author.Name,
+		mr.Author.WebURL,
+		mr.Description,
+	)
 }
 
 func importRepository(azdoCtx context.Context, project project, gitlabProject *gitlab.Project, azdoClient git.Client) *git.GitRepository {
-	if *recreateRepository {
-		log.Debugf("removing repository %s if exists from %s", gitlabProject.Path, project.AzdoProject)
-		repo, _ := azdoClient.GetRepository(azdoCtx, git.GetRepositoryArgs{
-			RepositoryId: &gitlabProject.Path,
-			Project:      &project.AzdoProject,
-		})
-		if repo != nil {
-			err := azdoClient.DeleteRepository(azdoCtx, git.DeleteRepositoryArgs{
-				RepositoryId: repo.Id,
-				Project:      nil,
-			})
-			if err != nil {
-				log.Errorf("could remove previous repository, cannot import to existing repo %s", err.Error())
-				return nil
-			}
-		}
-	}
-
-	log.Debugf("create empty repository %s", gitlabProject.Path)
-	azdoRepository, err := azdoClient.CreateRepository(azdoCtx, git.CreateRepositoryArgs{
-		GitRepositoryToCreate: &git.GitRepositoryCreateOptions{
-			Name: &gitlabProject.Path,
-		},
-		Project: &project.AzdoProject,
-	})
+	azdoRepository, err := reinitAzdoRepository(azdoCtx, project, gitlabProject, azdoClient)
 	if err != nil {
-		log.Errorf("could not initiate repository %s: %s", gitlabProject.Path, err)
+		log.Error(err)
 		return nil
 	}
 
-	requestArg := git.GitImportRequest{
-		Parameters: &git.GitImportRequestParameters{
-			GitSource: &git.GitImportGitSource{
-				Overwrite: gitlab.Bool(false),
-				Url:       &gitlabProject.HTTPURLToRepo,
-			},
-		},
-	}
-	if *azdoServiceEndpoint != "" {
-		spUUID := uuid.MustParse(*azdoServiceEndpoint)
-		requestArg.Parameters.ServiceEndpointId = &spUUID
-	}
-
-	importRequestArgs := git.CreateImportRequestArgs{
-		ImportRequest: &requestArg,
-		Project:       &project.AzdoProject,
-		RepositoryId:  gitlab.String(azdoRepository.Id.String()),
-	}
-
-	log.Debugf("create import request to transfer %s into new repo %s", gitlabProject.HTTPURLToRepo, gitlabProject.Path)
-	importRequest, err := azdoClient.CreateImportRequest(azdoCtx, importRequestArgs)
+	importRequest, err := createImportRequest(azdoCtx, project, gitlabProject, azdoClient, azdoRepository)
 	if err != nil {
-		log.Errorf("could not create import request. Either service endpoint is not correct or source repository is empty: %s", err)
+		log.Error(err)
 		return nil
 	}
 
@@ -367,6 +343,65 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 		log.Debugf("waiting for import to finish retry in 3 seconds...")
 		time.Sleep(3 * time.Second)
 	}
+}
+
+func createImportRequest(azdoCtx context.Context, project project, gitlabProject *gitlab.Project, azdoClient git.Client, azdoRepository *git.GitRepository) (*git.GitImportRequest, error) {
+	requestArg := git.GitImportRequest{
+		Parameters: &git.GitImportRequestParameters{
+			GitSource: &git.GitImportGitSource{
+				Overwrite: gitlab.Bool(false),
+				Url:       &gitlabProject.HTTPURLToRepo,
+			},
+		},
+	}
+	if *azdoServiceEndpoint != "" {
+		spUUID := uuid.MustParse(*azdoServiceEndpoint)
+		requestArg.Parameters.ServiceEndpointId = &spUUID
+	}
+
+	importRequestArgs := git.CreateImportRequestArgs{
+		ImportRequest: &requestArg,
+		Project:       &project.AzdoProject,
+		RepositoryId:  gitlab.String(azdoRepository.Id.String()),
+	}
+
+	log.Debugf("create import request to transfer %s into new repo %s", gitlabProject.HTTPURLToRepo, gitlabProject.Path)
+	importRequest, err := azdoClient.CreateImportRequest(azdoCtx, importRequestArgs)
+	if err != nil {
+		return nil, fmt.Errorf("could not create import request. Either service endpoint is not correct or source repository is empty: %s", err)
+	}
+	return importRequest, nil
+}
+
+func reinitAzdoRepository(azdoCtx context.Context, project project, gitlabProject *gitlab.Project, azdoClient git.Client) (*git.GitRepository, error) {
+	if *recreateRepository {
+		log.Debugf("removing repository %s if exists from %s", gitlabProject.Path, project.AzdoProject)
+		repo, _ := azdoClient.GetRepository(azdoCtx, git.GetRepositoryArgs{
+			RepositoryId: &gitlabProject.Path,
+			Project:      &project.AzdoProject,
+		})
+		if repo != nil {
+			err := azdoClient.DeleteRepository(azdoCtx, git.DeleteRepositoryArgs{
+				RepositoryId: repo.Id,
+				Project:      nil,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("could remove previous repository, cannot import to existing repo %s", err.Error())
+			}
+		}
+	}
+
+	log.Debugf("create empty repository %s", gitlabProject.Path)
+	azdoRepository, err := azdoClient.CreateRepository(azdoCtx, git.CreateRepositoryArgs{
+		GitRepositoryToCreate: &git.GitRepositoryCreateOptions{
+			Name: &gitlabProject.Path,
+		},
+		Project: &project.AzdoProject,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not initiate repository %s: %s", gitlabProject.Path, err)
+	}
+	return azdoRepository, nil
 }
 
 func readConfig() config {
