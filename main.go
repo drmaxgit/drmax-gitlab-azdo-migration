@@ -24,6 +24,7 @@ var (
 	azdoServiceEndpoint = kingpin.Flag("azdo-endpoint", "Azure DevOps service endpoint for gitlab").Default("").String()
 	configFile          = kingpin.Flag("config", "Projects configuration file").Default("projects.json").String()
 	recreateRepository  = kingpin.Flag("recreate-repo", "If true, repository in azdo will be deleted first and created again. Use with caution").Default("false").Bool()
+	archiveProjects     = kingpin.Flag("archive-projects", "If true, repositories in gitlab will be archived after transition.").Default("true").Bool()
 	//SuggestionReplacer Regex to match gitlab suggestion schema so that it can be replaced to azdo schema
 	SuggestionReplacer = regexp.MustCompile("```suggestion:.*")
 )
@@ -69,6 +70,14 @@ func processProject(azdoCtx context.Context, project project, gitlabClient *gitl
 
 	if project.MigrateMRs {
 		importMergeRequests(azdoCtx, project, gitlabClient, azdoClient, gitlabProject, repository)
+	}
+
+	if *archiveProjects {
+		log.Debugf("archiving project %d in Gitlab", project.GitlabID)
+		_, _, err := gitlabClient.Projects.ArchiveProject(project.GitlabID)
+		if err != nil {
+			log.Errorf("couldn't archive gitlab project %d: %s", project.GitlabID, err.Error())
+		}
 	}
 }
 
@@ -313,6 +322,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 		log.Error(err)
 		return nil
 	}
+	log.Infof("GIT:%d;%s;%s;%s;%s", gitlabProject.ID, gitlabProject.WebURL, gitlabProject.SSHURLToRepo, gitlabProject.HTTPURLToRepo, *azdoRepository.SshUrl)
 
 	importRequest, err := createImportRequest(azdoCtx, project, gitlabProject, azdoClient, azdoRepository)
 	if err != nil {
@@ -328,7 +338,7 @@ func importRepository(azdoCtx context.Context, project project, gitlabProject *g
 	for {
 		currentRequest, err := azdoClient.GetImportRequest(azdoCtx, requestStatusArg)
 		if (currentRequest == nil && err == nil) || *currentRequest.Status == git.GitAsyncOperationStatusValues.Completed {
-			log.Debug("import finished")
+			log.Debugf("import finished - %s", *azdoRepository.WebUrl)
 			return azdoRepository
 		}
 		if *currentRequest.Status == git.GitAsyncOperationStatusValues.Abandoned {
